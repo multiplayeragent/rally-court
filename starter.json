@@ -1,0 +1,21 @@
+{
+  "name": "Rally Court",
+  "genre": "sports",
+  "dim": "3D",
+  "mode": "Versus",
+  "players": "2–4",
+  "hook": "Arcade tennis where your timing aims every shot.",
+  "how": "Your player runs to the ball by itself; swing as it reaches you. Early goes cross-court, late goes down the line, right on time is a power shot. First to 4 games wins, with a tiebreak at 3–3; doubles once 3 people are here.",
+  "controls": "Space to swing, K to lob, arrows or WASD to steer (← → aim the serve) · touch: stick, SWING, LOB",
+  "uses": [
+    ["Host-run rules", "The host's browser calls every bounce in or out, keeps the score and plays the bots; if it leaves, the next player takes over."],
+    ["Bots", "Bots fill every empty spot, so alone you play a full match against one."],
+    ["Leaderboard", "Each player's longest rally, in shots."],
+    ["Live sync", "Every player, swing and shot moves for everyone at once."]
+  ],
+  "ideas": [
+    "Make it a clay court at sunset with orange dust puffs",
+    "Add a super shot meter that fills up during long rallies",
+    "Make the ball speed up a little with every shot in a rally"
+  ]
+}
