@@ -87,10 +87,11 @@
  * WHERE THINGS ARE (search for the "── " headers):
  *   CONFIG ........ scoring, court size, ball physics, running, swing timing windows, serving, bots
  *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host, the host's clock
- *   BALL .......... flights: bounces, the net, where a ball crosses you, building shots and serves
+ *   BALL .......... flights: bounces, the net, where a ball crosses you, where to stand for it (after the
+ *                   bounce, or a volley up at the net), building shots and serves
  *   COURT ......... renderer, grass and lines, net, stands, crowd, players, ball, particles, sound
  *   MATCH (HOST) .. seats, serves, faults, in/out calls, points, games, the tiebreak, the winner
- *   BOTS .......... the bot brain: run to the ball, swing with a human-like timing error, serve
+ *   BOTS .......... the bot brain: run to the ball, volley at the net, swing with a human-like timing error, serve
  *   ME ............ my player: auto-run + steering, my swing and my serve, judged on my screen
  *   VIEWS ......... other players and the bots, eased between writes
  *   DRAW .......... placing everyone, the ball, effects, the timing ring and the camera
@@ -145,6 +146,9 @@ const CONFIG = {
   runSpeed: 7.2,          // m/s
   accel: 12,              // how quickly a player starts and stops
   autoAfterMs: 350,       // after you let go of the stick, auto-run takes over again
+  backRoom: 2.4,          // how far behind the baseline a player goes for a deep ball (further and their feet leave the screen)
+  volleyZone: 7,          // closer to the net than this, a player cuts the ball off in the air (a volley)...
+  volleyStep: 2.6,        // ...when it passes within this many metres of them
   // The swing: ms off the moment the ball reaches you
   earlyMs: 230,           // earlier than this: too early, a practice swing (swing again)
   lateMs: 170,            // later than this: it got past you
@@ -168,6 +172,7 @@ const CONFIG = {
   botTimingMs: 62,        // spread of a bot's timing error (bigger = more mistakes)
   botFastPenaltyMs: 40,   // ...plus this much against a fast ball
   botLob: 0.15,           // chance a bot lobs (doubled when someone is at the net)
+  botVolley: 0.8,         // chance a bot up at the net goes for a ball it could volley
   sendMs: 80,             // my player ~12 times a second
   botSendMs: 80,          // the bots, the same
   attractDoubles: true,   // the preview plays doubles
@@ -305,16 +310,28 @@ function crossTime(f, zLine, after) {
   }
   return null;
 }
-/** Where a player should stand to hit a ball coming to `team`: just after the bounce, at about waist height. Null = it won't land in. */
+/** Where a player should stand to hit a ball coming to `team`: after the bounce, at about waist height, but never further
+ *  behind the baseline than CONFIG.backRoom (a deep fast ball is taken where it crosses that line). Null = it won't land in. */
 function hitSpot(f, team, g) {
-  const { b, segs } = pieces(f), b1 = b[0];
-  if (!b1 || b1.z * sideSign(team) <= 0 || Math.abs(b1.x) > halfW(g) + 0.3 || Math.abs(b1.z) > L + 0.3) return null;
+  const { b, segs } = pieces(f), b1 = b[0], z0 = sideSign(team);
+  if (!b1 || b1.z * z0 <= 0 || Math.abs(b1.x) > halfW(g) + 0.3 || Math.abs(b1.z) > L + 0.3) return null;
   const s = segs.find((q) => q.t0 >= b1.t - 0.5);
   if (!s) return null;
-  const apex = s.vy / G, top = R + (s.vy * s.vy) / (2 * G), want = 1.15;
-  const e = top <= want ? apex : (s.vy + Math.sqrt(Math.max(0, s.vy * s.vy - 2 * G * (want - R)))) / G;
+  const apex = s.vy / G, top = R + (s.vy * s.vy) / (2 * G), want = 1.15, back = L + CONFIG.backRoom;
+  let e = top <= want ? apex : (s.vy + Math.sqrt(Math.max(0, s.vy * s.vy - 2 * G * (want - R)))) / G;
+  if (s.vz && (s.z + s.vz * e) * z0 > back) e = Math.max(0, (z0 * back - s.z) / s.vz); // the moment it crosses the back line: x and z from the same moment
   const t = s.t0 + e * 1000, p = flightPos(f, t);
-  return { x: p.x, z: clamp(p.z, sideSign(team) > 0 ? 1 : -L - 4, sideSign(team) > 0 ? L + 4 : -1), t };
+  return { x: p.x, z: clamp(p.z, z0 > 0 ? 1 : -back, z0 > 0 ? back : -1), t };
+}
+/** Where a player up at the net (body p) can cut flight f off in the air: the point it crosses their line, if that is within
+ *  a step or two and at a height they can hit. Null = let it go by (too far, too high, or it bounces first). */
+function volleySpot(f, p) {
+  if (Math.abs(p.z) > CONFIG.volleyZone) return null;
+  const t = crossTime(f, p.z, f.t0 + 100), b1 = pieces(f).b[0];
+  if (t === null || (b1 && t > b1.t)) return null;
+  const q = flightPos(f, t);
+  if (q.y < 0.3 || q.y > CONFIG.reachH - 0.4 || Math.abs(q.x - p.x) > CONFIG.volleyStep) return null;
+  return { x: q.x, z: p.z, t };
 }
 /** A flight from `from` landing at (tx, tz) after T seconds. */
 function solveFlight(from, tx, tz, T, t0) {
@@ -669,12 +686,18 @@ function readySpot(g, id) {
   if (id === lead || list.length === 1) return st === team ? { x: rs * court * 1.1, z: z0 * (L + 0.3) } : { x: rs * court * 2.6, z: z0 * (L + 0.6) };
   return st === team ? { x: -rs * court * 2.2, z: z0 * 3.2 } : { x: -rs * court * 2.4, z: z0 * 6.2 }; // the partner: at the net, or on the service line
 }
-/** Where a player waits during a rally: singles on the baseline; doubles one back, one up. */
+/** Where a player waits during a rally: singles on the baseline; doubles one back and one up at the net, each on their own
+ *  half. Whoever is deeper right now plays from the back (so the server and the receiver stay back, their partner stays up). */
 function homeSpot(g, id) {
   const team = teamOf(g, id), z0 = sideSign(team), list = g.teams[team];
   if (list.length === 1) return { x: 0, z: z0 * (L - 0.6) };
-  const i = list.indexOf(id);
-  return i === 0 ? { x: rightSign(team) * 1.6, z: z0 * (L - 0.8) } : { x: -rightSign(team) * 1.8, z: z0 * 4.8 };
+  const i = list.indexOf(id), p = bodyOf(id), mate = bodyOf(list[1 - i]);
+  let back = i === 0, side = i === 0 ? rightSign(team) : -rightSign(team);
+  if (p && mate) {
+    if (Math.abs(Math.abs(p.z) - Math.abs(mate.z)) > 0.5) back = Math.abs(p.z) > Math.abs(mate.z);
+    if (Math.abs(p.x - mate.x) > 0.5) side = Math.sign(p.x - mate.x);
+  }
+  return back ? { x: side * 1.6, z: z0 * (L - 0.8) } : { x: side * 1.8, z: z0 * 4.8 };
 }
 /** Where a body is on this screen: mine, a bot (the host's live one, or eased from state), or another person. */
 function bodyOf(id) {
@@ -720,7 +743,7 @@ function winPoint(g, w) {
   return { ...g, games, pts: [0, 0], gn: g.gn + 1, tb, win: won ? w : -1, gw: w };
 }
 const withCall = (g, k, t, s = "") => ({ ...g, call: { n: ((g.call && g.call.n) || 0) + 1, k, t, s } });
-function addStat(st, id, i) { if (!id || isBot(id)) return st; const row = [...(st[id] || [0, 0, nameOf(id)])]; row[i]++; row[2] = nameOf(id); return { ...st, [id]: row }; }
+function addStat(st, id, i) { if (!id) return st; const row = [...(st[id] || [0, 0, nameOf(id)])]; row[i]++; row[2] = nameOf(id); return { ...st, [id]: row }; }
 /** The point is over: side w won it. `how` is the call: ace, winner, out, net, double. */
 function award(g, B, w, how, T) {
   const rally = B && B.n >= g.sn ? B.n - g.sn + 1 : 0;
@@ -836,7 +859,14 @@ function applyHit(from, m) {
 }
 
 // ── BOTS ────────────────────────────────────────────────────────────────────────────
-/** The ball is coming to a side with bots: the one nearest to where it lands takes it, with a timing error. */
+/** One bot's plan for ball B: where it takes the ball, how far off its timing will be, and when it starts to run. */
+function botPlan(id, spot, g, B, T) {
+  const fast = Math.hypot(B.f.vx, B.f.vz) > 21, oppAtNet = g.teams[B.team].some((o) => { const p = bodyOf(o); return p && Math.abs(p.z) < 4.5; });
+  const err = gauss() * (CONFIG.botTimingMs + (fast ? CONFIG.botFastPenaltyMs : 0));
+  return { n: B.n, id, spot, err, lob: Math.random() < CONFIG.botLob * (oppAtNet ? 2 : 1), go: T + CONFIG.botReactMs * (0.6 + Math.random() * 0.8) };
+}
+/** The ball is coming to a side with bots: the one nearest to where it lands takes it, with a timing error. In doubles a
+ *  bot up at the net cuts it off in the air first when it passes close enough; if it misses, the one behind still plays it. */
 function botsReturn(g, B, T) {
   const rt = 1 - B.team;
   if (!host.plan || host.plan.n !== B.n) {
@@ -845,10 +875,10 @@ function botsReturn(g, B, T) {
     if (spot) {
       let best = null, bd = Infinity;
       for (const id of g.teams[rt]) { const p = bodyOf(id) || homeSpot(g, id), d = Math.hypot(p.x - spot.x, p.z - spot.z); if (d < bd) { bd = d; best = id; } }
-      if (isBot(best)) {
-        const fast = Math.hypot(B.f.vx, B.f.vz) > 21, oppAtNet = g.teams[B.team].some((id) => { const p = bodyOf(id); return p && Math.abs(p.z) < 4.5; });
-        const err = gauss() * (CONFIG.botTimingMs + (fast ? CONFIG.botFastPenaltyMs : 0));
-        host.plan = { n: B.n, id: best, spot, err, lob: Math.random() < CONFIG.botLob * (oppAtNet ? 2 : 1), go: T + CONFIG.botReactMs * (0.6 + Math.random() * 0.8) };
+      if (isBot(best)) host.plan = botPlan(best, spot, g, B, T);
+      for (const id of g.teams[rt]) { // the volley (never off a serve: it has to bounce)
+        const b = host.bots.get(id), v = b && B.kind !== "serve" && volleySpot(B.f, b);
+        if (v && Math.random() < CONFIG.botVolley) host.plan = { ...botPlan(id, v, g, B, T), then: host.plan.id && host.plan.id !== id ? host.plan : null };
       }
     }
   }
@@ -858,19 +888,21 @@ function botsReturn(g, B, T) {
   if (tc === null || T < tc + P.err) return;
   P.done = true; bot.s = T;
   const bp = flightPos(B.f, T), bs = pieces(B.f).b;
-  if (Math.abs(bp.x - bot.x) > CONFIG.reach || bp.y > CONFIG.reachH || (bs[1] && T > bs[1].t) || P.err < -CONFIG.earlyMs || P.err > CONFIG.lateMs) return; // a miss
+  if (Math.abs(bp.x - bot.x) > CONFIG.reach || bp.y > CONFIG.reachH || (bs[1] && T > bs[1].t) || P.err < -CONFIG.earlyMs || P.err > CONFIG.lateMs) { if (P.then) host.plan = P.then; return; } // a miss
   const { u, q } = timingOf(P.err, CONFIG.perfectMs, CONFIG.earlyMs, CONFIG.lateMs), kind = bp.y > CONFIG.smashH ? "smash" : P.lob ? "lob" : "drive";
   const f = makeShot(kind, { x: bp.x, y: Math.max(0.35, bp.y), z: bp.z }, rt, u, q, g, T, Math.random);
   writeBall({ n: B.n + 1, kind, f, pf: B.f, by: P.id, team: rt, bx: 0 });
 }
 function moveBots(g, B, dt, T) {
   if (!g) return;
+  const P = host.plan && B && host.plan.n === B.n && !host.plan.done ? host.plan : null;
   for (const b of host.bots.values()) {
     let tgt = homeSpot(g, b.id), speed = CONFIG.runSpeed * CONFIG.botSpeed;
+    const plan = !P ? null : P.id === b.id ? P : P.then && P.then.id === b.id ? P.then : null; // the one behind a volleyer runs to its spot too
     if (g.phase === "serve" || g.phase === "intro" || (g.phase === "pause" && g.nx === "serve")) tgt = readySpot(g, b.id);
-    else if (g.phase === "rally" && host.plan && host.plan.id === b.id && B && host.plan.n === B.n && !host.plan.done) {
-      if (T < host.plan.go) tgt = { x: b.x, z: b.z };
-      else tgt = { x: host.plan.spot.x - rightSign(teamOf(g, b.id)) * 0.55, z: host.plan.spot.z };
+    else if (g.phase === "rally" && plan) {
+      if (T < plan.go) tgt = { x: b.x, z: b.z };
+      else tgt = { x: plan.spot.x - rightSign(teamOf(g, b.id)) * 0.55, z: plan.spot.z };
     } else if (g.phase === "over" || g.phase === "pause") speed *= 0.4;
     stepBody(b, tgt.x - b.x, tgt.z - b.z, speed, dt, true);
     keepOnSide(b, teamOf(g, b.id));
@@ -928,12 +960,15 @@ function myTick(dt, g, now) {
   if (now - me.lastSend > CONFIG.sendMs && json !== me.lastJson) { me.lastSend = now; me.lastJson = json; net.me.set("p", json); }
 }
 function pushApart(a, o) { const dx = a.x - o.x, dz = a.z - o.z, d = Math.hypot(dx, dz); if (d < 0.9 && d > 0.001) { a.x += (dx / d) * (0.9 - d) * 0.5; a.z += (dz / d) * (0.9 - d) * 0.5; } }
-/** The ball I should run to: the one coming to my side, if I'm nearer its landing than my partner. */
+/** The ball I should run to: the one coming to my side, if I'm nearer its landing than my partner. Up at the net, a ball
+ *  that passes close enough is mine to volley: I step across to where it crosses my line. */
 function incomingSpot(g) {
   const team = teamOf(g, net.sessionId), B = shotNow();
   if (g.phase !== "rally" || !B || !B.f || B.team === team || me.hitN === B.n) return null;
   const spot = hitSpot(B.f, team, g);
   if (!spot) return null;
+  const volley = B.kind !== "serve" && volleySpot(B.f, me);
+  if (volley) return volley;
   for (const id of g.teams[team]) { const o = id !== net.sessionId && bodyOf(id); if (o && Math.hypot(o.x - spot.x, o.z - spot.z) < Math.hypot(me.x - spot.x, me.z - spot.z) - 0.3) return null; }
   return spot;
 }
@@ -1085,6 +1120,7 @@ function effectsFromCall(g, now) {
 const camPos = new THREE.Vector3(0, 7, 20), camLook = new THREE.Vector3(0, 0, -3), tmpV = new THREE.Vector3(), tmpL = new THREE.Vector3();
 function drawWorld(g, dt, now) {
   const T = hostNow(), ball = ballNow(g, T);
+  if (ball) { ball.x = clamp(ball.x, -GX + 0.2, GX - 0.2); ball.z = clamp(ball.z, -GZ + 0.2, GZ - 0.2); } // a ball rolling away stops at the wall, not in the crowd
   for (const f of figs.values()) f.used = false;
   for (const t of [0, 1]) for (const id of g.teams[t]) {
     const b = bodyOf(id); if (!b) continue;
