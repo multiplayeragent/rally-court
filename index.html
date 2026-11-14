@@ -52,6 +52,7 @@
   td:first-child, th:first-child { text-align: left; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; } tr.me td { color: #e4ff3c; font-weight: 700; }
   .card ol { text-align: left; margin: 0; padding-left: 26px; font-size: 14px; min-height: 22px; } .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card li.note { list-style: none; margin-left: -26px; } /* a status line, not a numbered entry */
   .card p { margin: 8px 0 0; font-size: 13px; opacity: .8; }
   button.again { width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; background: #e4ff3c; color: #1d3a00; font: 800 17px system-ui, sans-serif; cursor: pointer; }
 </style>
@@ -74,7 +75,7 @@
 <div id="over" hidden><div class="card">
   <h2 id="winner"></h2><div id="final"></div>
   <table id="stats"></table>
-  <h3>Longest rallies</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Longest rallies</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="again" id="again">Play again</button><p id="next"></p>
 </div></div>
 <script type="module">
@@ -1257,11 +1258,11 @@ function hud(g, now) {
 }
 function showBoard(best) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = `<li class="note">Leaderboards need a connection.</li>`; return; }
+  list.innerHTML = `<li class="note">Loading…</li>`;
   (best > 0 ? board.submit(best).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} shots</span></li>`).join("") : "<li>No rallies yet. Start one.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} shots</span></li>`).join("") : `<li class="note">No rallies yet. Start one.</li>`;
+  }).catch(() => { list.innerHTML = `<li class="note">Couldn't load the leaderboard.</li>`; });
 }
 $("again").onclick = () => { const g = game(); if (g && g.phase === "over") { myReady = g.id; net.me.set("rdy", g.id); } };
 /** Two players picked the same color at once (the joiner's first state can be empty): the later sessionId picks again. Bots take what's left. */
